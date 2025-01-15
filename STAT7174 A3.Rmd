@@ -1,0 +1,427 @@
+---
+title: 'STAT7174 Applications of Computational Statistics: Assignment 3'
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd('C:/Users/User/OneDrive/Desktop/STAT7174/STAT7174 A3')
+getwd()
+
+# Load necessary libraries
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(edgeR)
+library(tidyverse)
+```
+
+Load Data
+```{r}
+# Define file paths
+cerebellum_file <- "gene_reads_brain_cerebellum.gct"
+frontal_cortex_file <- "gene_reads_brain_frontal_cortex.gct"
+attributes_file <- "SampleAttributesDS_Brain.txt"
+
+# Read the GCT files
+cerebellum_data <- fread(cerebellum_file, skip = 2) #fread is a function from the data.table package that reads in data quickly. skip = 2 is used to skip the first two lines of the GCT files, which contain header information not relevant to the data.
+frontal_cortex_data <- fread(frontal_cortex_file, skip = 2)
+# Read the sample attributes
+attributes <- fread(attributes_file)
+```
+
+Part 1: Exploring RNA-seq Data Quality
+#1.1) Compare RNA quality measured by RNA Integrity Number (RIN) in the two tissue type groups
+#a) Produce a plot to show the distribution of RNA integrity for each group and report the group mean RIN
+```{r}
+# Filter the sample attributes data to include only the samples from "Brain - Cerebellum" and "Brain - Frontal Cortex (BA9)".
+brain_data_filtered <- attributes %>%
+  filter(SMTSD %in% c("Brain - Cerebellum", "Brain - Frontal Cortex (BA9)")) # The filter function from the dplyr package will subset the data to only include rows where the SMTSD column matches either "Brain - Cerebellum" or "Brain - Frontal Cortex (BA9)".
+
+# Initializes a ggplot object with the filtered data. aes specifies the tissue type (SMTSD) on the x-axis, RNA Integrity Number (SMRIN) on the y-axis, and the fill color based on tissue type.
+ggplot(brain_data_filtered, aes(x = SMTSD, y = SMRIN, fill = SMTSD)) +
+  geom_boxplot() + # Adds a boxplot layer to the plot to show the distribution of RIN values.
+  geom_jitter(width = 0.2, alpha = 0.5) + # Adds a layer to the plot to display individual data points with some random noise added to the x-position to prevent over plotting. width = 0.2 controls the amount of jitter, and alpha = 0.5 sets the transparency of the points.
+  labs(title = "Distribution of RNA Integrity Number (RIN)", x = "Tissue Type", y = "RIN") +
+  theme_minimal() +
+  theme(legend.position = "none") # Removes the legend from the plot since the fill color already provides the necessary information.
+
+# Calculate mean RIN
+mean_rin <- brain_data_filtered %>%
+  group_by(SMTSD) %>%
+  summarise(mean_RIN = mean(SMRIN, na.rm = TRUE)) # Calculates the mean RIN for each group, ignoring missing values (na.rm = TRUE).
+mean_rin
+```
+The boxplot represents the distribution of RNA Integrity Number (RIN) for two tissue types: Brain - Cerebellum and Brain - Frontal Cortex (BA9). Each boxplot shows the median, quartiles, and outliers in the data.
+Cerebellum (Red): The median RIN value is around 6.8, as indicated by the thick horizontal line inside the box.
+Frontal Cortex (Blue): The median RIN value is slightly higher than that of the Cerebellum, around 7.1.
+The interquartile range (IQR), represented by the height of the box, indicates the middle 50% of the data. Whiskers extend to show the range of the data, excluding outliers, which are represented by individual points outside the whiskers.
+The RNA integrity (RIN) for Brain - Frontal Cortex (BA9) is generally higher than for Brain - Cerebellum, as indicated by both the boxplot and the mean RIN values.
+This analysis highlights that the RNA integrity is tissue-dependent, which is important for downstream RNA-seq analyses and ensuring reliable results.
+
+#b) State the null and alternative hypotheses
+```{r}
+#Null Hypothesis (H0): There is no difference in the RNA Integrity Number (RIN) between cerebellum and frontal cortex tissues.
+#Alternative Hypothesis (H1): There is a significant difference in the RNA Integrity Number (RIN) between cerebellum and frontal cortex tissues.
+```
+
+#c) Check assumptions and perform the appropriate statistical test; 
+```{r}
+# Check normality assumption for each group
+shapiro_test_cerebellum <- shapiro.test(brain_data_filtered$SMRIN[brain_data_filtered$SMTSD == "Brain - Cerebellum"]) # Filters the RIN values for the Cerebellum group from the brain_data_filtered dataframe.
+shapiro_test_frontal_cortex <- shapiro.test(brain_data_filtered$SMRIN[brain_data_filtered$SMTSD == "Brain - Frontal Cortex (BA9)"]) # Filters the RIN values for the Frontal Cortex (BA9) group from the brain_data_filtered dataframe.
+# Prints the results of the normality tests, including the W statistic and p-value for each group.
+shapiro_test_cerebellum
+shapiro_test_frontal_cortex
+
+# Perform t-test to compare the mean RIN values between the two tissue type groups
+t_test <- t.test(SMRIN ~ SMTSD, data = brain_data_filtered) # the RIN values (SMRIN) are being compared across the tissue types (SMTSD) and the data set to be used is brain_data_filtered from 4.1.
+t_test
+```
+The Shapiro-Wilk normality tests for both groups indicated that the RIN values are not normally distributed (p-values < 0.05). 
+Despite this, a Welch Two Sample t-test was performed, showing a significant difference in RIN between the two tissue types (p-value = 1.355e-05).
+
+#d) Draw your conclusion
+```{r}
+#Given the p-value from the Welch t-test, we reject the null hypothesis (H0). Therefore, we conclude that there is a significant difference in the RNA Integrity Number (RIN) between cerebellum and frontal cortex tissues.
+```
+
+#1.2) Explore the correlation between all included RNA-seq data quality metrics (Intragenic Rate, Mapping Rate, Exonic Rate and Genes Detected) by also considering tissue type groups: [3 marks]
+#a)	Produce relevant scatter plots.
+```{r}
+# Select relevant quality metrics from brain_data_filtered and stores them in quality_metrics. 
+quality_metrics <- brain_data_filtered %>%
+  select(SMNTRART, SMMAPRT, SMEXNCRT, SMGNSDTC, SMTSD)
+
+# Convert tissue types to numeric values for coloring
+tissue_colors <- as.numeric(factor(brain_data_filtered$SMTSD))
+
+# Plot pairwise scatter plots with the pairs function
+pairs(quality_metrics %>% select(-SMTSD), main = "Scatter Plots of RNA-seq Quality Metrics", col = tissue_colors)
+```
+Box 1 (SMNTRART vs. SMNTRART): Distribution of Intragenic Rate.
+Box 2 (SMNTRART vs. SMMAPRT): Scatter plot of Intragenic Rate (y-axis) vs. Mapping Rate (x-axis). Shows a weak positive correlation.
+Box 3 (SMNTRART vs. SMEXNCRT): Scatter plot of Intragenic Rate (y-axis) vs. Exonic Rate (x-axis). Shows a strong positive correlation. The points form a linear pattern, indicating that as the intragenic rate increases, the exonic rate also increases.
+Box 4 (SMNTRART vs. SMGNSDTC): Scatter plot of Intragenic Rate (y-axis) vs. Genes Detected (x-axis). Shows a moderate negative correlation.
+Box 5 (SMMAPRT vs. SMNTRART): Scatter plot of Mapping Rate (y-axis) vs. Intragenic Rate (x-axis). This is a mirror image of Box 2.
+Box 6 (SMMAPRT vs. SMMAPRT): Distribution of Mapping Rate.
+Box 7 (SMMAPRT vs. SMEXNCRT): Scatter plot of Mapping Rate (y-axis) vs. Exonic Rate (x-axis). Shows a weak positive correlation.
+Box 8 (SMMAPRT vs. SMGNSDTC): Scatter plot of Mapping Rate (y-axis) vs. Genes Detected (x-axis). Shows a weak positive correlation.
+Box 9 (SMEXNCRT vs. SMNTRART): Scatter plot of Exonic Rate (y-axis) vs. Intragenic Rate (x-axis). This is a mirror image of Box 3.
+Box 10 (SMEXNCRT vs. SMMAPRT): Scatter plot of Exonic Rate (y-axis) vs. Mapping Rate (x-axis). This is a mirror image of Box 7.
+Box 11 (SMEXNCRT vs. SMEXNCRT): Distribution of Exonic Rate.
+Box 12 (SMEXNCRT vs. SMGNSDTC): Scatter plot of Exonic Rate (y-axis) vs. Genes Detected (x-axis). Shows a moderate negative correlation.
+Box 13 (SMGNSDTC vs. SMNTRART): Scatter plot of Genes Detected (y-axis) vs. Intragenic Rate (x-axis). This is a mirror image of Box 4.
+Box 14 (SMGNSDTC vs. SMMAPRT): Scatter plot of Genes Detected (y-axis) vs. Mapping Rate (x-axis). This is a mirror image of Box 8.
+Box 15 (SMGNSDTC vs. SMEXNCRT): Scatter plot of Genes Detected (y-axis) vs. Exonic Rate (x-axis). This is a mirror image of Box 12.
+Box 16 (SMGNSDTC vs. SMGNSDTC): Distribution of Genes Detected.
+
+#b)	Report the correlation coefficients.
+```{r}
+# Calculate correlation matrix
+cor_matrix <- cor(quality_metrics %>% select(-SMTSD), use = "complete.obs") # Calculates the Pearson correlation coefficients between each pair of quality metrics. The use = "complete.obs" argument ensures rows with missing values are excluded).
+cor_matrix
+```
+
+#c)	Comment on the strength and direction of correlations.
+The correlation coefficients range from -1 to 1, where:1 indicates a perfect positive correlation, -1 indicates a perfect negative correlation, 0 indicates no correlation.
+SMNTRART and SMEXNCRT: There is a strong positive correlation (0.799), indicating that as the intragenic rate increases, the exonic rate also tends to increase.
+SMNTRART and SMGNSDTC: There is a moderate negative correlation (-0.271), suggesting that as the intragenic rate increases, the number of genes detected tends to decrease.
+SMMAPRT and SMNTRART: There is a very weak negative correlation (-0.017), indicating almost no relationship between the mapping rate and the intragenic rate.
+SMMAPRT and SMEXNCRT: There is a very weak positive correlation (0.007), indicating almost no relationship between the mapping rate and the exonic rate.
+SMMAPRT and SMGNSDTC: There is a very weak positive correlation (0.006), indicating almost no relationship between the mapping rate and the number of genes detected.
+SMEXNCRT and SMGNSDTC: There is a moderate negative correlation (-0.353), suggesting that as the exonic rate increases, the number of genes detected tends to decrease.
+
+#1.3) Perform multiple linear regression analysis to model the Exonic Rate using sample information variables (RIN, Ischemic time, rRNA Rate and Tissue Type). 
+Explain why you included or excluded specific variables. Report intercept and slope coefficients, adjusted Rsquared, the residual squared error and the p-value. [2 marks]
+```{r}
+# Perform multiple linear regression
+model <- lm(SMEXNCRT ~ SMRIN + SMTSISCH + SMRRNART + SMTSD, data = brain_data_filtered) # lm() function performs linear regression with Exonic Rate (SMEXNCRT) as the dependent variable and SMRIN, SMTSISCH, SMRRNART, and SMTSD as independent variables.
+summary(model)
+
+# Report coefficients, R-squared, residual error, and p-value
+coefficients <- summary(model)$coefficients # This extracts the regression coefficients (intercept and slopes) and their associated statistics (standard error, t-value, p-value).
+adjusted_r_squared <- summary(model)$adj.r.squared # This extracts the adjusted R-squared value, indicating the proportion of variance explained by the model, adjusted for the number of predictors.
+residual_se <- summary(model)$sigma # This extracts the residual standard error, indicating the standard deviation of the residuals (differences between observed and predicted values).
+p_value <- anova(model)$`Pr(>F)`[1] # This extracts the p-value from the ANOVA table for the overall significance of the model.
+
+# Create a list containing the model's coefficients, adjusted R-squared, residual standard error, and p-value.
+list(coefficients = coefficients, adjusted_r_squared = adjusted_r_squared, residual_se = residual_se, p_value = p_value)
+```
+In this multiple linear regression model, the dependent variable is the Exonic Rate (SMEXNCRT). The independent variables included are:
+- **RIN (SMRIN)**: Included because RNA integrity could impact exonic rate.
+- **Ischemic Time (SMTSISCH)**: Included because the duration before sample preservation might affect RNA quality.
+- **rRNA Rate (SMRRNART)**: Included because it can affect the exonic rate measurement.
+- **Tissue Type (SMTSD)**: Included as a categorical variable to capture differences between tissue types.
+Each variable was included because it is hypothesized to have a potential impact on the exonic rate based on biological relevance.
+
+The multiple linear regression model is summarized as follows:
+- **Intercept**: 7.561e-01, p-value < 2e-16. This represents the estimated exonic rate when all predictor variables are set to zero. The p-value indicates that the intercept is statistically significant.
+- **RIN (SMRIN)**: -5.730e-03, p-value = 0.000153. The coefficient for RIN is negative, suggesting that as the RNA Integrity Number (RIN) increases by one unit, the exonic rate decreases by approximately 0.00573 units. 
+                    The small p-value indicates that this relationship is statistically significant, meaning that RNA integrity significantly impacts the exonic rate.
+- **Ischemic Time (SMTSISCH)**: 2.653e-06 p-value = 0.509393. The coefficient for Ischemic Time is positive but very close to zero, indicating that Ischemic Time has a negligible effect on the exonic rate. 
+                    The large p-value (greater than 0.05) suggests that this relationship is not statistically significant, meaning that the duration before sample preservation does not significantly impact the exonic rate.
+- **rRNA Rate (SMRRNART)**: 8.705e-02, p-value = 0.104684. The coefficient for rRNA Rate is positive, indicating that an increase in rRNA Rate is associated with an increase in the exonic rate by approximately 0.08705 units. 
+                    However, the p-value is greater than 0.05, indicating that this relationship is not statistically significant, meaning that rRNA Rate does not significantly impact the exonic rate.
+- **Tissue Type (Brain - Frontal Cortex (BA9))**: 1.168e-01, p-value < 2e-16. 
+                    The coefficient for Tissue Type (Brain - Frontal Cortex (BA9)) is positive, indicating that samples from the Brain - Frontal Cortex (BA9) have an exonic rate that is 0.1168 units higher on average compared to the reference tissue type (Brain - Cerebellum). 
+                    The very small p-value indicates that this relationship is statistically significant, meaning that the tissue type significantly impacts the exonic rate.
+The adjusted R-squared value is 0.884, indicating that 88.4% of the variability in the exonic rate can be explained by the model. 
+This suggests that the model fits the data very well and that the included variables collectively explain a large proportion of the variation in the exonic rate.
+The residual standard error is 0.02127, and the overall p-value of the model is < 2e-16, indicating that the model is statistically significant and there is a very low probability that the observed relationships in the model occurred by random chance.
+
+#1.4) Explore model diagnostic plots and comment on whether the linear regression model was appropriate for this data. [2 marks]
+```{r}
+par(mfrow = c(2, 2)) #Set the plotting area to have 2 rows and 2 columns.
+plot(model) #Generates four standard diagnostic plots for the linear regression model:
+```
+- **Residuals vs Fitted**: The plot shows a random scatter of residuals around zero, indicating that the model's assumptions of linearity and homoscedasticity (constant variance) are met.
+- **Normal Q-Q**: The plot shows that most of the residuals lie on the diagonal line, suggesting that the residuals are normally distributed.
+- **Scale-Location**: The plot shows a horizontal line with equally spread points, indicating homoscedasticity.
+- **Residuals vs Leverage**: The plot does not show any points with high leverage, indicating that there are no influential outliers significantly affecting the model.
+Based on these diagnostic plots, the linear regression model appears to be appropriate for this data.
+
+#Part 2. Differential Gene Expression Analysis (8 marks) Perform differential gene expression analysis using edgeR to identify differentially expressed genes in one tissue type compared to the other selected tissue.
+```{r}
+# Ensure consistent column names for merging by replaceing any spaces in the column names of the cerebellum_data and frontal_cortex_data data frames with underscores.
+colnames(cerebellum_data) <- gsub(" ", "_", colnames(cerebellum_data))
+colnames(frontal_cortex_data) <- gsub(" ", "_", colnames(frontal_cortex_data))
+
+# Merge the cerebellum_data and frontal_cortex_data data frames on the 'Name' and 'Description' columns combining into a single data frame, gene_data.
+gene_data <- full_join(cerebellum_data, frontal_cortex_data, by = c("Name", "Description"))
+
+# Read the sample attributes
+attributes <- read_tsv(attributes_file)
+
+# Filter attributes for selected tissue types
+brain_data_filtered <- attributes %>%
+  filter(SMTSD %in% c("Brain - Cerebellum", "Brain - Frontal Cortex (BA9)"))
+
+# Create a group vector for tissue types. The group vector will be used as the grouping variable in the differential expression analysis to compare the two tissue types.
+group <- factor(brain_data_filtered$SMTSD)
+
+# Ensure 'GTEX' columns are in the same order in 'gene_data' as in 'brain_data_filtered'
+sample_ids <- brain_data_filtered$SAMPID
+gene_data <- gene_data %>% select(Name, Description, all_of(sample_ids))
+```
+
+
+#2.1) Generate an edgeR object (DGEList function; include your group vector (tissue type)), filter out lowly expressed genes and calculate the normalisation factor. Report the number of genes before and after filtering. [2 marks]
+```{r}
+# Prepare data for edgeR
+counts <- gene_data %>% select(starts_with("GTEX")) # Selects only the columns from gene_data that contain gene expression counts (these columns start with "GTEX").
+rownames(counts) <- gene_data$Name # Sets the row names of the counts data frame to be the gene names from the Name column of gene_data. This makes it easier to identify which rows correspond to which genes.
+
+# Create a DGEList object that contains the count data (counts), the grouping factor (group), and gene annotations (genes), which include the gene Name and Description.
+dge <- DGEList(counts = counts, group = group, genes = gene_data %>% select(Name, Description)) 
+
+# Filter out lowly expressed genes
+keep <- filterByExpr(dge) # filterByExpr is a function in edgeR that determines which genes have expression levels high enough to be informative for differential expression analysis.
+dge <- dge[keep, , keep.lib.sizes = FALSE] # Subsets the DGEList object to include only the genes that passed the filter (keep). The keep.lib.sizes = FALSE argument ensures that the library sizes are recalculated based only on the remaining genes.
+
+# Report the number of genes before and after filtering
+genes_before_filtering <- nrow(gene_data) # Counts the number of genes in the original gene_data data frame.
+genes_after_filtering <- nrow(dge$counts) # Counts the number of genes remaining in the dge object after filtering.
+cat("Number of genes before filtering:", genes_before_filtering, "\n") # Prints the number of genes before filtering.
+cat("Number of genes after filtering:", genes_after_filtering, "\n") # Prints the number of genes after filtering.
+
+# Calculate normalization factors
+dge <- calcNormFactors(dge) # Computes normalization factors to adjust for differences in library sizes and other systematic variations between samples.
+```
+
+#2.2) Transform the gene expression values after filtering and normalisation (using log2 transformation and the cpm function with prior.count=1). Produce a plot of your choice to show the distribution of gene expression values for the first 50 samples. [2 marks]
+```{r}
+# Log2 transformation and CPM
+logCPM <- cpm(dge, log = TRUE, prior.count = 1) # The cpm calculates counts per million (CPM) values from the count data in the dge object. Setting log = TRUE applies a log2 transformation to the CPM values. 
+#The prior.count = 1 argument adds a small constant (1) to each count before taking the log transformation to avoid taking the log of zero, which would be undefined. This transformation helps stabilize the variance and makes the data more suitable for downstream analysis.
+
+# Plot the distribution of gene expression values for the first 50 samples
+boxplot(logCPM[, 1:50], las = 2, main = "Distribution of Gene Expression Values", ylab = "log2(CPM)") # las argument sets the orientation of the axis labels to be perpendicular to the axis, making them easier to read when there are many labels.
+```
+The distribution of log2(CPM) values is relatively uniform across the first 50 samples, indicating good data consistency.
+Most gene expression levels are centered around a similar log2(CPM) range, with some genes exhibiting higher expression as outliers.
+
+#2.3) Create a design matrix (using model.matrix function) and estimate the dispersion (estimateDisp). Fit a generalised linear model and perform differential expression analysis using glmTreat function with logFC set to 1 (lfc=1). [2 marks]
+```{r}
+# Create a design matrix that models the relationship between the samples and their corresponding groups (tissue types in this case: Brain - Cerebellum and Brain - Frontal Cortex (BA9)).
+design <- model.matrix(~ group)
+
+# Estimate dispersion
+dge <- estimateDisp(dge, design)
+
+# Fit a generalized linear model
+fit <- glmFit(dge, design) # glmFit fits the GLM for each gene, estimating the coefficients that describe the relationship between gene expression and the explanatory variables in the design matrix.
+
+# Perform differential expression analysis with glmTreat
+lrt <- glmTreat(fit, coef = 2, lfc = 1) # glmTreat performs likelihood ratio tests for each gene, testing whether the log-fold change (logFC) between the groups is significantly different from a specified threshold (in this case, logFC = 1).
+#The coef = 2 parameter specifies which coefficient in the design matrix corresponds to the group comparison of interest.
+topTags(lrt)
+```
+
+#2.4) Report the top 10 differentially expressed genes sorted by p-value. [1 mark]
+```{r}
+# Get top 10 differentially expressed genes
+top_genes <- topTags(lrt, n = 10, sort.by = "PValue")
+top_genes_table <- top_genes$table
+top_genes_table
+```
+
+#2.5) Summarise how many genes were found to be significantly (FDR<0.05) down- and upregulated one tissue type compared with the other (state the tissue types). [1 mark]
+```{r}
+# Number of significantly differentially expressed genes
+fdr_threshold <- 0.05
+significant_genes <- decideTestsDGE(lrt, p.value = fdr_threshold) #decideTestsDGE takes the results of the likelihood ratio tests (stored in lrt) and applies the specified p-value threshold (FDR threshold in this case) to identify significant genes. 
+#The result is a matrix indicating whether each gene is significantly upregulated, downregulated, or not significantly differentially expressed.
+
+# Summarize the results
+downregulated <- sum(significant_genes == -1)
+upregulated <- sum(significant_genes == 1)
+cat("Number of significantly downregulated genes:", downregulated, "\n")
+cat("Number of significantly upregulated genes:", upregulated, "\n")
+```
+This balance of upregulated and downregulated genes indicates that there are significant differences in gene expression profiles between the two tissue types, suggesting distinct biological processes or states. These differentially expressed genes can provide insights into the molecular mechanisms underlying the differences between the tissue types and potentially identify targets for further functional studies.
+
+
+#Part 3. Principal Component Analysis (5 marks)
+
+#3.1) Perform a Principal Component Analysis (PCA) on all genes (from Part 2 Question 2). Use logCPM normalised values (Part 2.2) and the arguments center = TRUE and scale = TRUE in the PCA. [2 marks]
+```{r}
+# Perform PCA on logCPM normalized values
+logCPM <- cpm(dge, log = TRUE, prior.count = 1)
+pca <- prcomp(t(logCPM), center = TRUE, scale. = TRUE)
+
+# Print summary of PCA
+summary(pca)
+```
+
+#3.2) Output the plot for the first two principal components, colouring the plot by the tissue type groups. Comment on the graph obtained. [1 mark]
+```{r}
+# Extract PCA results
+pca_data <- as.data.frame(pca$x)
+pca_data$Tissue <- brain_data_filtered$SMTSD
+
+# Plot the first two principal components
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Tissue)) +
+  geom_point(alpha = 0.6, size = 3) +
+  labs(title = "PCA Plot: PC1 vs PC2", x = "Principal Component 1", y = "Principal Component 2") +
+  theme_minimal()
+```
+The PCA plot shows the distribution of samples based on the first two principal components, with points colored according to the tissue type (Brain - Cerebellum in red and Brain - Frontal Cortex (BA9) in blue).
+Samples from the Brain - Cerebellum cluster together distinctly from samples from the Brain - Frontal Cortex (BA9). 
+This indicates that the gene expression profiles of the two tissue types are significantly different, as captured by the first two principal components.
+PC1 appears to explain a significant portion of the variance that separates the two tissue types.
+The separation along the PC1 axis is quite distinct, with Brain - Cerebellum samples having negative PC1 values and Brain - Frontal Cortex (BA9) samples having positive PC1 values.
+
+
+#3.3) Output the plot for the first two principal components, colouring the plot by the RIN. Comment on the graph obtained. [1 mark]
+```{r}
+# Add RIN to PCA data
+pca_data$RIN <- brain_data_filtered$SMRIN
+
+# Plot the first two principal components colored by RIN
+ggplot(pca_data, aes(x = PC1, y = PC2, color = RIN)) +
+  geom_point(alpha = 0.6, size = 3) +
+  labs(title = "PCA Plot: PC1 vs PC2", x = "Principal Component 1", y = "Principal Component 2") +
+  scale_color_gradient(low = "blue", high = "red") +
+  theme_minimal()
+```
+The PCA plot for the first two principal components colored by RNA Integrity Number (RIN) shows how the RIN values distribute across the two principal components. 
+If there is no clear pattern based on RIN, it suggests that RNA quality does not have a strong impact on the primary sources of variance in the data.
+The distinct separation between Brain - Cerebellum and Brain - Frontal Cortex (BA9) clusters suggests that the differences in gene expression profiles are the dominant factor, rather than variations in RNA quality.
+
+#3.4) Are two components enough to explain most of the variance in the data? Provide justification to support your conclusion. [1 mark]
+```{r}
+# Variance explained by each principal component
+variance_explained <- summary(pca)$importance[2, ]
+
+# Plot cumulative variance explained
+cumulative_variance <- cumsum(variance_explained)
+plot(cumulative_variance, xlab = "Principal Component", ylab = "Cumulative Proportion of Variance Explained", type = "b", main = "Cumulative Variance Explained by Principal Components")
+
+# Determine the number of components explaining most of the variance
+num_components <- which(cumulative_variance >= 0.80)[1]
+cat("Number of principal components explaining at least 80% of the variance:", num_components, "\n")
+```
+The cumulative variance plot shows the proportion of variance explained by each principal component. Typically, principal components that together explain at least 80% of the variance are considered sufficient. 
+Based on the plot, we can determine if two components are enough or if more components are needed to explain most of the variance. 
+For example, if two components explain less than 80% of the variance, we would need more components to capture the majority of the data's variability.
+Based on the cumulative variance explained plot, around 38 principal components are needed to capture at least 80% of the variance. 
+This indicates that the data has complex underlying structures that require a larger number of components to adequately summarize the variance.
+The cumulative variance explained plot is a critical tool to determine the number of principal components required to capture a desired proportion of variance. 
+The goal is often to capture at least 80% of the variance to ensure that the majority of the data's variability is retained in the reduced dimensions. 
+In this case, using only two components would overlook a significant amount of information, suggesting the need for more components to comprehensively capture the data's complexity.
+
+
+#Part 4. Sample Clustering using Gene Expression (8 marks)
+
+#4.1) First, use the logCPM normalised gene expression values (Part 2.2) and calculate the variance for each gene (all samples). Carry out a K-means clustering of the samples using the top 100 most variable genes with k=2 and nstart=25. [2 marks]
+```{r}
+# Calculate variance for each gene
+gene_variance <- apply(logCPM, 1, var)
+
+# Select the top 100 most variable genes
+top_100_genes <- names(sort(gene_variance, decreasing = TRUE))[1:100]
+
+# Subset logCPM for the top 100 most variable genes
+top_100_logCPM <- logCPM[top_100_genes, ]
+
+# Perform K-means clustering with k=2 and nstart=25
+set.seed(123)  # For reproducibility
+kmeans_result <- kmeans(t(top_100_logCPM), centers = 2, nstart = 25)
+
+# Add cluster assignments to the sample data
+brain_data_filtered$Cluster <- kmeans_result$cluster
+
+# Display the number of samples in each cluster
+cluster_table <- table(brain_data_filtered$Cluster, brain_data_filtered$SMTSD)
+print(cluster_table)
+```
+
+
+#4.2) Based on the clusters, what number of samples from the two tissue types were clustered together? [2 marks]
+Based on the K-means clustering results, we can determine the number of samples from each tissue type (Brain - Cerebellum and Brain - Frontal Cortex (BA9)) that were clustered together. The table above shows the distribution of samples across the clusters.
+Cluster 1: Contains 241 sample from Brain - Cerebellum and 0 samples from Brain - Frontal Cortex (BA9).
+Cluster 2: Contains 0 samples from Brain - Cerebellum and 209 samples from Brain - Frontal Cortex (BA9).
+This indicates a perfect separation of the two tissue types into distinct clusters.
+
+#4.3) Carry out a hierarchical clustering of the samples using the top 100 most variable genes (identified in Part 4 Question 1). Comment on the plot that is obtained. [2 marks] 
+```{r}
+# Perform hierarchical clustering
+distance_matrix <- dist(t(top_100_logCPM))
+hclust_result <- hclust(distance_matrix, method = "complete")
+
+# Cut the dendrogram tree at the first split
+cutree_result <- cutree(hclust_result, k = 2)
+
+# Add hierarchical cluster assignments to the sample data
+brain_data_filtered$HCluster <- cutree_result
+
+# Plot the dendrogram without labels
+plot(hclust_result, labels = FALSE, main = "Hierarchical Clustering Dendrogram", xlab = "Samples", sub = "")
+rect.hclust(hclust_result, k = 2, border = "red")
+```
+The dendrogram shows two clear clusters, which are distinctly separated by the red rectangles. 
+The clustering indicates that the gene expression profiles of Brain - Cerebellum and Brain - Frontal Cortex (BA9) are distinctly different. 
+The clear separation of the two tissue types into distinct clusters suggests that the gene expression profiles of Brain - Cerebellum and Brain - Frontal Cortex (BA9) are significantly different, aligning with the expected biological differences between these brain regions.
+
+#4.4) Based on the first split in the hierarchy, what number of samples from the two tissue types were clustered together? [2 marks]
+```{r}
+# Display the number of samples in each hierarchical cluster
+hcluster_table <- table(brain_data_filtered$HCluster, brain_data_filtered$SMTSD)
+print(hcluster_table)
+```
+The hierarchical clustering results show that the samples from each tissue type are distinctly clustered, supporting the conclusion that gene expression profiles are significantly different between Brain - Cerebellum and Brain - Frontal Cortex (BA9).
+
+
+
+
+
+
+
